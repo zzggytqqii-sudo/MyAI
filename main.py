@@ -1,4 +1,3 @@
-cat << 'EOF' > main.py
 import os
 import sys
 import time
@@ -7,113 +6,186 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import threading
+import urllib.request
+import json
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from duckduckgo_search import DDGS
 
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
-HF_TOKEN = os.getenv("HF_TOKEN", "hf_YOUR_TOKEN_HERE")
-HF_REPO = os.getenv("HF_REPO", "zzggytqqii-sudo/MyAI-Model")
-MODEL_FILE = "myai_checkpoint.pt"
+MODEL_FILE = "agent_checkpoint.pt"
+DATA_DIR = "web_corpus"
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# خادم ويب خفيف للبقاء نشطاً
+# حالة النظام لعرضها على لوحة التحكم localhost:8080
+state = {
+    "step": 0,
+    "loss": 0.0,
+    "val_loss": 0.0,
+    "vocab_size": 0,
+    "generated_text": "Agent is initializing global web exploration...",
+    "status": "Running Free Web Scraper & Trainer"
+}
+lock = threading.Lock()
+
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(b"MyAI Agent is Running 24/7 Free!")
+        html = f"""
+        <!DOCTYPE html>
+        <html lang="ar" dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <title>لوحة الوكيل الحر - Global AI Agent</title>
+            <style>
+                body {{ background: #0f172a; color: #f8fafc; font-family: sans-serif; padding: 20px; }}
+                .card {{ background: #1e293b; padding: 20px; border-radius: 12px; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
+                h1 {{ color: #38bdf8; font-size: 22px; }}
+                .stat {{ font-size: 20px; color: #4ade80; font-weight: bold; }}
+                .log {{ background: #000; padding: 10px; border-radius: 6px; font-family: monospace; color: #a3e635; overflow-x: auto; }}
+            </style>
+        </head>
+        <body>
+            <h1>🌐 لوحة التحكم بالوكيل الحر (Global Web Explorer)</h1>
+            <div class="card">
+                <p>حالة الوكيل: <span style="color: #38bdf8;">{state['status']}</span></p>
+                <p>دورات التعلم: <span class="stat">{state['step']}</span> | معدل الخطأ: <span class="stat">{state['loss']}</span></p>
+                <p>حجم المعجم: <span class="stat">{state['vocab_size']}</span> كلمة</p>
+            </div>
+            <div class="card">
+                <h3>🧠 آخر ما استكشفه وتعلمه الوكيل:</h3>
+                <div class="log">{state['generated_text']}</div>
+            </div>
+        </body>
+        </html>
+        """
+        self.wfile.write(html.encode("utf-8"))
+
+    def log_message(self, format, *args):
+        pass
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
-# طباعة حية ومباشرة فورية بدون تأخير
-def log(stage, msg):
+def log_tv(stage, msg):
     t = time.strftime("%H:%M:%S")
     print(f"[{t}] [{stage}] {msg}")
     sys.stdout.flush()
 
-# نموذج شبكة عصبية للتدريب والحفظ
-class SimpleAIModel(nn.Module):
-    def __init__(self):
+# نموذج عصبية متطور للتعامل مع النصوص
+class GlobalAgentModel(nn.Module):
+    def __init__(self, vocab_size):
         super().__init__()
-        self.fc1 = nn.Linear(10, 64)
-        self.fc2 = nn.Linear(64, 10)
+        self.emb = nn.Embedding(vocab_size, 64)
+        self.rnn = nn.LSTM(64, 128, num_layers=2, batch_first=True, dropout=0.2)
+        self.fc = nn.Linear(128, vocab_size)
+
     def forward(self, x):
-        return self.fc2(F.relu(self.fc1(x)))
+        return self.fc(self.rnn(self.emb(x))[0])
 
+def tokenize(text):
+    return re.findall(r"\b\w+\b", text.lower(), re.UNICODE)
+
+# حلقة الاستكشاف الحر عبر الويب وجوجل ومختلف المواقع
 def continuous_learning_worker():
-    log("تأسيس", "بدء تشغيل المحرك الذاتي والنموذج العصبي...")
+    log_tv("INIT", "Starting autonomous global web exploration worker...")
     
-    model = SimpleAIModel()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    step = 0
-
-    # 1. ميزة الاسترجاع الحقيقي للأوزان المحفوظة سابقة
-    if os.path.exists(MODEL_FILE):
-        try:
-            checkpoint = torch.load(MODEL_FILE)
-            model.load_state_dict(checkpoint['model'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            step = checkpoint.get('step', 0)
-            log("استرجاع", f"تم تحميل الأوزان المحفوظة بنجاح! الاستئناف من الخطوة #{step}")
-        except Exception as e:
-            log("تحذير", f"تعذر تحميل الأوزان القديمة، بدء جديد. السبب: {e}")
-    else:
-        log("تأسيس", "لم يتم العثور على أوزان سابقة، بدء نموذج جديد من الصفر.")
-
-    ddgs = DDGS()
-    queries = [
-        "site:github.com python ai model transformer",
-        "site:github.com deep learning pytorch code",
-        "site:github.com android app source code",
-        "site:github.com game engine godot script"
+    # استعلامات بحث مفتوحة تغطي كل شيء في الإنترنت (جوجل، جيت هاب، أبحاث، أكواد، تقنية)
+    search_queries = [
+        "site:github.com python ai agent framework",
+        "site:arxiv.org artificial intelligence reasoning",
+        "latest programming tutorials and documentation",
+        "neural network architecture implementation python",
+        "advanced autonomous software development concepts"
     ]
-
+    
+    vocab = ["<unk>", "ai", "agent", "python", "data", "system"]
+    stoi = {w: i for i, w in enumerate(vocab)}
+    itos = {i: w for i, w in enumerate(vocab)}
+    
+    model = GlobalAgentModel(len(vocab))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+    
+    step = 0
     while True:
-        step += 1
-        log("---", f"=== بدء دورة التعلم الذاتي رقم #{step} ===")
-        
-        # أ. مرحلة سحب البيانات (Scraping)
-        q = random.choice(queries)
-        log("سحب البيانات", f"جاري البحث وسحب الأكواد باستعلام: {q}")
         try:
-            results = list(ddgs.text(q, max_results=2))
-            log("نجاح السحب", f"تم جلب {len(results)} نتائج ومقاطع من الويب.")
+            step += 1
+            query = random.choice(search_queries)
+            log_tv("SEARCH", f"Exploring web with query: {query}")
+            
+            scraped_text = ""
+            try:
+                with DDGS() as ddgs:
+                    results = [r for r in ddgs.text(query, max_results=3)]
+                    for res in results:
+                        link = res.get("href", "")
+                        body = res.get("body", "")
+                        scraped_text += f"\n{body}"
+                        log_tv("FETCH", f"Visited link: {link[:50]}...")
+                        
+                        # محاولة سحب محتوى الصفحة الخام إذا أمكن
+                        try:
+                            req = urllib.request.Request(link, headers={"User-Agent": "Mozilla/5.0"})
+                            with urllib.request.urlopen(req, timeout=5) as resp:
+                                html_content = resp.read().decode("utf-8", errors="ignore")
+                                clean_text = re.sub(r'<[^>]+>', ' ', html_content)
+                                scraped_text += f"\n{clean_text[:2000]}"
+                        except:
+                            pass
+            except Exception as e:
+                log_tv("WARN", f"Search minor error: {e}")
+                scraped_text = "Autonomous agent global web exploration fallback training text."
+
+            # تحديث المعجم والكلمات بناءً على البيانات الجديدة المسحوبة من أي مكان
+            new_words = tokenize(scraped_text)
+            for w in new_words:
+                if w not in stoi and len(vocab) < 10000:
+                    stoi[w] = len(vocab)
+                    itos[len(vocab)] = w
+                    vocab.append(w)
+            
+            if len(vocab) != model.fc.out_features:
+                model = GlobalAgentModel(len(vocab))
+                optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+
+            ids = torch.tensor([stoi.get(w, 0) for w in new_words[:1000]], dtype=torch.long)
+            
+            if len(ids) > 16:
+                x, y = ids[:-15], ids[15:]
+                out = model(x[:32].unsqueeze(0))
+                loss = F.cross_entropy(out.reshape(-1, len(vocab)), y[:32])
+                
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                
+                loss_val = round(loss.item(), 4)
+                log_tv("TRAIN", f"Step {step} | Loss: {loss_val} | Vocab: {len(vocab)}")
+                
+                with lock:
+                    state["step"] = step
+                    state["loss"] = loss_val
+                    state["vocab_size"] = len(vocab)
+                    state["generated_text"] = scraped_text[:300]
+                    state["status"] = f"Exploring: {query[:30]}..."
+            
+            time.sleep(5)
+            
         except Exception as e:
-            log("خطأ سحب", f"تعذر السحب في هذه الدورة: {e}")
+            log_tv("ERROR", f"Worker loop error: {e}")
+            time.sleep(10)
 
-        # ب. مرحلة التفكير والتصفية (Thinking & Reasoning)
-        log("تفكير وتشفير", "تحليل الأنماط البرمجية المستخرجة وتجهيز مدخلات التدريب...")
-        time.sleep(2)
-
-        # ج. مرحلة التدريب الذاتي (PyTorch Forward & Backprop)
-        log("تدريب عصبي", "تعديل أوزان الشبكة العصبية (Neural Network Upgrade)...")
-        dummy_input = torch.randn(4, 10)
-        dummy_target = torch.randint(0, 10, (4,))
-        output = model(dummy_input)
-        loss = F.cross_entropy(output, dummy_target)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        log("نتيجة التدريب", f"معدل الخطأ الحالي (Loss): {loss.item():.4f}")
-
-        # د. مرحلة الحفظ الدائم (Auto-Save)
-        torch.save({
-            'step': step,
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict()
-        }, MODEL_FILE)
-        log("حفظ دائم", f"تم حفظ أوزان النموذج والتقدم بنجاح في '{MODEL_FILE}'")
-
-        log("انتظار", "الدورة مكتملة. بدء الدورة القادمة خلال 5 ثوانٍ...\n")
-        time.sleep(5)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
-    continuous_learning_worker()
-EOF
+    try:
+        continuous_learning_worker()
+    except KeyboardInterrupt:
+        log_tv("STOP", "Agent stopped by user.")
+        
